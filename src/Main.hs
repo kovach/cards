@@ -2,7 +2,12 @@
 
 module Main where
 
-import Types
+import Parse
 
 
-main = print $ R 33
+main = do
+  f <- readFile "prog.txt"
+  case runParser prog $ f of
+    xs -> do
+      mapM_ print $ take 5 xs
+      print $ length xs
