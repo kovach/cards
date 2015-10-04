@@ -1,3 +1,4 @@
+-- TODO this parser is wonky
 module Parse where
 
 data Parser a = P {runParser :: String -> [(a, String)]}
@@ -44,7 +45,9 @@ charSet = parseAny . map char
 
 ws :: Parser Char
 ws  = charSet $ " \n\t"
+ws' = charSet $ " \t"
 whitespace = many_ ws
+whitespace' = many_ ws'
 newline = charSet "\n"
 
 lowerAlpha = charSet $ ['a'..'z']
@@ -68,24 +71,39 @@ sep :: Parser a -> Parser b -> Parser [b]
 sep a b = ((:) <$> b <*> (a *> sep a b)) <|> (return <$> b)
 sepBy = sep
 
-data LHS = LHS [Pattern]
-  deriving (Show, Eq, Ord)
-type RHS = String
 type Symbol = String
+data Value
+  = Num Int
+  | Ref Symbol
+  | Member Symbol Symbol
+  deriving (Show, Eq, Ord)
 data Expr
   = App Symbol [Symbol]
-  | Ref Symbol
+  | EVal Value
+  deriving (Show, Eq, Ord)
+data Binder = Binder Expr Symbol
   deriving (Show, Eq, Ord)
 data Pattern
   = PExpr Expr
-  | PBind Expr Symbol
+  | PBind Binder
+  deriving (Show, Eq, Ord)
+data Action
+  = Mutate Symbol Symbol Expr
+  | AExpr Expr
+  | ABind Binder
+  deriving (Show, Eq, Ord)
+data LHS = LHS [Pattern]
+  deriving (Show, Eq, Ord)
+data ERHS = ERHS Expr
+  deriving (Show, Eq, Ord)
+data MRHS = MRHS [Action]
   deriving (Show, Eq, Ord)
 data Arrow = FnArrow | MutArrow
   deriving (Eq, Ord)
 instance Show Arrow where
   show FnArrow = "->"
   show MutArrow = "~>"
-data Rule = Rule LHS Arrow RHS
+data Rule = ERule LHS ERHS | MRule LHS MRHS
   deriving (Show, Eq, Ord)
 data Def = Def String [Rule]
   deriving (Eq, Ord)
@@ -103,32 +121,57 @@ finish p = p <* (P finish')
 
 symbol = token identifier
 
--- TODO there is some repetition in the output parse list, ie chkk pattern "a b"
-expr :: Parser Expr
-expr = argParser <|> appParser
+readInt :: String -> [(Int, String)]
+readInt = reads
+
+value :: Parser Value
+value = num <|> ref <|> member
   where
-    argParser = Ref <$> identifier
+    num = Num <$> P readInt
+    ref = Ref <$> identifier
+    member = Member <$> identifier <*> (char '.' *> identifier)
+
+expr :: Parser Expr
+expr = (EVal <$> value) <|> appParser
+  where
     appParser = App <$> identifier <*> (many1 ws *> args)
 
-pattern :: Parser Pattern
-pattern = exprParser <|> bindParser
+binder :: Parser Binder
+binder = bindR <|> bindL
   where
-    exprParser = PExpr <$> expr
-    bindParser = bindR <|> bindL
-    bindR = PBind <$> token expr <*> (token (char ')') *> identifier)
-    bindL = flip PBind <$> token identifier <*> (token (char '(') *> expr)
+    bindR = Binder <$> token expr <*> (token (char ')') *> identifier)
+    bindL = flip Binder <$> token identifier <*> (token (char '(') *> expr)
 
-lhs = LHS <$> sep (token $ char ',') (token pattern)
-rhs = identifier
-ruleArrow = (string "->" >> return FnArrow) <|> (string "~>" >> return MutArrow)
+pattern :: Parser Pattern
+pattern = (PExpr <$> expr) <|> (PBind <$> binder)
+
+-- TODO
+action :: Parser Action
+action = (ABind <$> binder) <|> (AExpr <$> expr) <|> mutate
+  where
+    mutate = Mutate <$> identifier <*> (char '.' *> token identifier)
+                    <*> (token (string "<-") *> expr)
+
+commas x = sep (token $ char ',') x
+
+lhs = LHS <$> commas (token pattern)
+erhs = ERHS <$> expr
+mrhs = MRHS <$> commas (token action)
+
+earrow = (string "->" >> return FnArrow)
+marrow = (string "~>" >> return MutArrow)
 
 args = sepBy (many1 ws) identifier
 
-nlws = newline >> whitespace
+nlws = whitespace' >> many1 newline >> whitespace'
+wslr x = whitespace *> x <* whitespace
 def  = Def  <$> identifier <*> (nlws *> sepBy nlws rule)
-rule = Rule <$> lhs  <*> token ruleArrow <*> token rhs
+rule = erule <|> mrule
+  where
+    erule = ERule <$> lhs <*> (token earrow *> erhs)
+    mrule = MRule <$> lhs <*> (token marrow *> mrhs)
 
-prog = finish $ whitespace *> def
+prog = wslr def
 
 
 chk' p = head . runParser p

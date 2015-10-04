@@ -1,5 +1,5 @@
 rule1
-  predicate p -> p
-  a , b ~> lol
+  predicate p, p.x -> p
+  a , b ~> a b
   y ( q x, q2 y -> y
-  q x ) y -> y
+  x ~> q x ) y, y.foo <- x.foo
