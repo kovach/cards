@@ -1,5 +1,8 @@
 rule1
-  predicate p, p.x -> p
-  a , b ~> a b
+  Predicate p, p.x -> p
   y ( q x, q2 y -> y
+.
+rule2
+  a , b ~> a b
   x ~> q x ) y, y.foo <- x.foo
+.

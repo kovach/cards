@@ -58,18 +58,16 @@ idSym = charSet "-'"
 
 idChar = lowerAlpha <|> upperAlpha <|> digit <|> idSym
 
-identifier = do
-  c <- lowerAlpha
-  cs <- many (idChar)
-  return $ c : cs
+identifier' first = (:) <$> first <*> many idChar
+identifier = identifier' lowerAlpha
+predIdentifier = identifier' upperAlpha
 
 token x = (x <* many ws)
 
 indent = many1 ws
 
-sep :: Parser a -> Parser b -> Parser [b]
-sep a b = ((:) <$> b <*> (a *> sep a b)) <|> (return <$> b)
-sepBy = sep
+sepBy :: Parser a -> Parser b -> Parser [b]
+sepBy a b = ((:) <$> b <*> (a *> sepBy a b)) <|> (return <$> b)
 
 type Symbol = String
 data Value
@@ -78,19 +76,23 @@ data Value
   | Member Symbol Symbol
   deriving (Show, Eq, Ord)
 data Expr
-  = App Symbol [Symbol]
+  = App Symbol [Value]
   | EVal Value
   deriving (Show, Eq, Ord)
 data Binder = Binder Expr Symbol
   deriving (Show, Eq, Ord)
+data Predicate = Predicate Symbol [Value]
+  deriving (Show, Eq, Ord)
 data Pattern
   = PExpr Expr
   | PBind Binder
+  | PPred Predicate
   deriving (Show, Eq, Ord)
 data Action
   = Mutate Symbol Symbol Expr
   | AExpr Expr
   | ABind Binder
+  | APred Predicate
   deriving (Show, Eq, Ord)
 data LHS = LHS [Pattern]
   deriving (Show, Eq, Ord)
@@ -131,6 +133,10 @@ value = num <|> ref <|> member
     ref = Ref <$> identifier
     member = Member <$> identifier <*> (char '.' *> identifier)
 
+spaces = sepBy (many1 ws)
+
+args = spaces value
+
 expr :: Parser Expr
 expr = (EVal <$> value) <|> appParser
   where
@@ -142,38 +148,42 @@ binder = bindR <|> bindL
     bindR = Binder <$> token expr <*> (token (char ')') *> identifier)
     bindL = flip Binder <$> token identifier <*> (token (char '(') *> expr)
 
+predicate :: Parser Predicate
+predicate = Predicate <$> predIdentifier <*> (many1 ws *> args)
+
 pattern :: Parser Pattern
-pattern = (PExpr <$> expr) <|> (PBind <$> binder)
+pattern = (PExpr <$> expr) <|> (PBind <$> binder) <|> (PPred <$> predicate)
 
 -- TODO
 action :: Parser Action
-action = (ABind <$> binder) <|> (AExpr <$> expr) <|> mutate
+action = (ABind <$> binder) <|> (AExpr <$> expr) <|> (APred <$> predicate)
+         <|> mutate
   where
     mutate = Mutate <$> identifier <*> (char '.' *> token identifier)
                     <*> (token (string "<-") *> expr)
 
-commas x = sep (token $ char ',') x
+commas x = sepBy (whitespace >> token (char ',')) x
 
-lhs = LHS <$> commas (token pattern)
+lhs = LHS <$> commas (pattern)
 erhs = ERHS <$> expr
-mrhs = MRHS <$> commas (token action)
+mrhs = MRHS <$> commas (action)
 
 earrow = (string "->" >> return FnArrow)
 marrow = (string "~>" >> return MutArrow)
 
-args = sepBy (many1 ws) identifier
-
 nlws = whitespace' >> many1 newline >> whitespace'
 wslr x = whitespace *> x <* whitespace
-def  = Def  <$> identifier <*> (nlws *> sepBy nlws rule)
+endDef = string "\n.\n"
+def  = Def  <$> identifier <*> (nlws *> sepBy nlws rule <* endDef)
 rule = erule <|> mrule
   where
-    erule = ERule <$> lhs <*> (token earrow *> erhs)
-    mrule = MRule <$> lhs <*> (token marrow *> mrhs)
+    erule = ERule <$> token lhs <*> (token earrow *> erhs)
+    mrule = MRule <$> token lhs <*> (token marrow *> mrhs)
 
-prog = wslr def
+prog :: Parser [Def]
+prog = wslr $ many def
 
 
 chk' p = head . runParser p
-chk p = head . runParser (finish p)
+chk p = runParser (finish p)
 chn n p = take n . runParser (finish p)
